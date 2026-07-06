@@ -1,15 +1,24 @@
+import { mdiPencil } from "@mdi/js";
 import type { CSSResultGroup, PropertyValues } from "lit";
 import { LitElement, css, html, nothing } from "lit";
 import { customElement, property, state } from "lit/decorators";
 import { debounce } from "../../common/util/debounce";
 import { deepEqual } from "../../common/util/deep-equal";
+import "../../components/ha-icon-button";
 import "../../components/ha-top-app-bar-fixed";
+import {
+  fetchFrontendSystemData,
+  saveFrontendSystemData,
+  type SecurityFrontendSystemData,
+} from "../../data/frontend";
 import type { LovelaceStrategyViewConfig } from "../../data/lovelace/config/view";
 import { ChildPanelReady } from "../../layouts/panel-ready";
 import { haStyle } from "../../resources/styles";
 import type { HomeAssistant } from "../../types";
+import { showToast } from "../../util/toast";
 import { generateLovelaceViewStrategy } from "../lovelace/strategies/get-strategy";
 import type { Lovelace } from "../lovelace/types";
+import { showEditSecurityDialog } from "./dialogs/show-dialog-edit-security";
 import "../lovelace/views/hui-view";
 import "../lovelace/views/hui-view-container";
 import "../lovelace/views/hui-view-background";
@@ -30,9 +39,13 @@ class PanelSecurity extends LitElement {
 
   @state() private _lovelace?: Lovelace;
 
+  @state() private _config: SecurityFrontendSystemData = {};
+
   @state() private _searchParms = new URLSearchParams(window.location.search);
 
   private _childPanelReady?: ChildPanelReady;
+
+  private _loadConfigPromise?: Promise<void>;
 
   public willUpdate(changedProps: PropertyValues<this>) {
     super.willUpdate(changedProps);
@@ -77,8 +90,23 @@ class PanelSecurity extends LitElement {
   }
 
   private async _setup() {
-    await this.hass.loadFragmentTranslation("lovelace");
+    this._loadConfigPromise = this._loadConfig();
+    await this._loadConfigPromise;
     this._setLovelace();
+  }
+
+  private async _loadConfig() {
+    try {
+      const [_, data] = await Promise.all([
+        this.hass.loadFragmentTranslation("lovelace"),
+        fetchFrontendSystemData(this.hass.connection, "security"),
+      ]);
+      this._config = data || {};
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error("Failed to load security configuration:", err);
+      this._config = {};
+    }
   }
 
   private _debounceRegistriesChanged = debounce(
@@ -97,6 +125,12 @@ class PanelSecurity extends LitElement {
         .backButton=${this._searchParms.has("historyBack")}
       >
         <div slot="title">${this.hass.localize("panel.security")}</div>
+        <ha-icon-button
+          slot="actionItems"
+          .path=${mdiPencil}
+          .label=${this.hass.localize("ui.panel.security.editor.title")}
+          @click=${this._editSecurity}
+        ></ha-icon-button>
         ${
           this._lovelace
             ? html`
@@ -118,8 +152,17 @@ class PanelSecurity extends LitElement {
   }
 
   private async _setLovelace() {
+    if (this._loadConfigPromise) {
+      await this._loadConfigPromise;
+    }
+
     const viewConfig = await generateLovelaceViewStrategy(
-      SECURITY_LOVELACE_VIEW_CONFIG,
+      {
+        strategy: {
+          ...SECURITY_LOVELACE_VIEW_CONFIG.strategy,
+          alert_entities: this._config.alert_entities,
+        },
+      },
       this.hass
     );
 
@@ -144,6 +187,35 @@ class PanelSecurity extends LitElement {
       setEditMode: () => undefined,
       showToast: () => undefined,
     };
+  }
+
+  private _editSecurity = () => {
+    showEditSecurityDialog(this, {
+      config: this._config,
+      saveConfig: async (config) => {
+        await this._saveConfig(config);
+      },
+    });
+  };
+
+  private async _saveConfig(config: SecurityFrontendSystemData): Promise<void> {
+    try {
+      await saveFrontendSystemData(this.hass.connection, "security", config);
+      this._config = config || {};
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error("Failed to save security configuration:", err);
+      showToast(this, {
+        message: this.hass.localize("ui.panel.security.editor.save_failed"),
+        duration: 0,
+        dismissable: true,
+      });
+      return;
+    }
+    showToast(this, {
+      message: this.hass.localize("ui.common.successfully_saved"),
+    });
+    this._setLovelace();
   }
 
   static get styles(): CSSResultGroup {
