@@ -105,6 +105,11 @@ class PanelSecurity extends LitElement {
     } catch (err) {
       // eslint-disable-next-line no-console
       console.error("Failed to load security configuration:", err);
+      showToast(this, {
+        message: this.hass.localize("ui.panel.security.editor.load_failed"),
+        duration: 0,
+        dismissable: true,
+      });
       this._config = {};
     }
   }
@@ -215,7 +220,7 @@ class PanelSecurity extends LitElement {
     showToast(this, {
       message: this.hass.localize("ui.common.successfully_saved"),
     });
-    this._setLovelace();
+    await this._setLovelace();
   }
 
   static get styles(): CSSResultGroup {
